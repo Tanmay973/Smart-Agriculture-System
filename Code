@@ -1,0 +1,249 @@
+#include <DHT.h>
+#include<OakOLED.h>
+#include <ESP8266WiFi.h>
+#include <ArduinoJson.h>
+#include <Wire.h>
+#include <PubSubClient.h>
+#include<WiFiManager.h>
+
+
+#define DHTPIN D3          // GPIO Pin where the dht11 is connected
+DHT dht(DHTPIN, DHT11);
+
+OakOLED oled;
+
+const char* ssid =  "Galaxy A5123CC";     // Enter your WiFi Name
+const char* pass =  "ewte7305"; // Enter your WiFi Password
+
+WiFiClient espclient;
+PubSubClient client(espclient);
+
+char mqtt_server[20] = "broker.emqx.io" ;
+char port[6] = "1883";
+char topic[40] = "Smart_agriculture";
+
+
+unsigned long lastMsg = 0;
+#define MSG_BUFFER_SIZE  (200)
+char json[MSG_BUFFER_SIZE];
+int value = 0;
+
+
+void reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Create a random client ID
+    String clientId = "espClient";
+   clientId += String(random(0xffff), HEX);
+    // Attempt to connect
+    if (client.connect(clientId.c_str()))
+   // if (client.connect("espClient", "BTbDj8IUPl7778PYLSvI", ""))
+    {
+      Serial.println("connected to broker: ");
+      Serial.println(mqtt_server);
+      //Once connected, publish an announcement...
+      //client.publish(topic, "hello world");
+      // ... and resubscribe
+      //client.subscribe("inTopic");
+    }
+    
+    else {
+      Serial.print("failed, rc=");
+      Serial.print(mqtt_server);
+      Serial.println(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+void mqtt_setup(){
+
+  client.setServer(mqtt_server, atoi(port));
+}
+
+
+
+const int moisturePin = A0;             // moisteure sensor pin
+const int motorPin = D0;
+unsigned long interval = 10000;
+unsigned long previousMillis = 0;
+unsigned long interval1 = 1000;
+unsigned long previousMillis1 = 0;
+float moisturePercentage;              //moisture reading
+float h;                  // humidity reading
+float t;                  //temperature reading
+bool W_P_status=false;
+
+void setup()
+{
+  Serial.begin(115200);
+  delay(10);
+  pinMode(motorPin, OUTPUT);
+  digitalWrite(motorPin, LOW); // keep motor off initally
+  dht.begin();
+  Serial.println("Connecting to ");
+  Serial.println(ssid);
+  WiFi.begin(ssid, pass);
+  oled.begin();
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setTextColor(1);
+  oled.setCursor(0,0);
+  oled.println("CONNECTING TO WiFi");
+  oled.display();
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(500);
+    Serial.print(".");              // print ... till not connected
+  }
+  Serial.println("");
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setTextColor(1);
+  oled.setCursor(0,0);
+  oled.println("CONNECTED TO WiFi");
+  oled.display();
+  Serial.println("WiFi connected");
+  // Print the IP address
+  Serial.println(WiFi.localIP());
+  delay(1000);
+    mqtt_setup();
+    
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setTextColor(1);
+  oled.setCursor(0,0);
+  oled.println("INITIALIZING SENSORS");
+  oled.display();
+  delay(1000);
+}
+
+void loop()
+{
+
+  if (!client.connected()) {
+    reconnect();
+  }
+  
+  unsigned long currentMillis = millis(); // grab current time
+
+  h = dht.readHumidity();     // read humiduty
+  t = dht.readTemperature();     // read temperature
+
+  if (isnan(h) || isnan(t))
+  {
+    Serial.println("Failed to read from DHT sensor!");
+    return;
+  }
+
+  moisturePercentage = ( 100.00 - ( (analogRead(moisturePin) / 1023.00) * 100.00 ) );
+
+  if ((unsigned long)(currentMillis - previousMillis1) >= interval1) {
+    Serial.print("Soil Moisture is  = ");
+    Serial.print(moisturePercentage);
+    Serial.println("%");
+    Serial.print("Temprature is  = ");
+    Serial.print(t);
+    Serial.println("^C");
+    Serial.print("Humidity is  = ");
+    Serial.print(h);
+    Serial.println("%");
+
+    oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setTextColor(1);
+  oled.setCursor(0,0);
+  oled.println("Soil Moisture:");
+  oled.setCursor(0,10);
+  oled.println(moisturePercentage);
+  oled.println("%");
+  oled.setCursor(0,20);
+  oled.println("Temprature:");
+  oled.setCursor(0,30);
+  oled.println(t);
+  oled.println("*C");
+  oled.setCursor(0,40);
+  oled.println("Humidity:");
+  oled.setCursor(0,50);
+  oled.println(h);
+  oled.println("%");
+  oled.display();
+    previousMillis1 = millis();
+  }
+
+if (moisturePercentage < 40) {
+  digitalWrite(motorPin, LOW);         // tun on motor
+  W_P_status=true;
+  StaticJsonDocument<200> doc;
+  JsonObject root = doc.to<JsonObject>();
+
+ root["serial_number"] = "ABC1234";
+  root["temp"] = t;
+  root["humid"] = h;
+  root["Soil_mois"] = moisturePercentage;
+root["W_P_status"] = W_P_status;
+
+
+
+  serializeJsonPretty(doc, Serial);
+  serializeJsonPretty(doc, json);
+
+  client.loop();
+
+  Serial.print("Publish message: ");
+    Serial.println(json);
+    client.publish(topic, json);
+
+}
+if (moisturePercentage > 40 && moisturePercentage < 42) {
+  digitalWrite(motorPin, LOW);        //turn on motor pump
+  W_P_status=true;
+  StaticJsonDocument<200> doc;
+  JsonObject root = doc.to<JsonObject>();
+
+ root["serial_number"] = "ABC1234";
+  root["temp"] = t;
+  root["humid"] = h;
+  root["Soil_mois"] = moisturePercentage;
+root["W_P_status"] = W_P_status;
+
+
+  serializeJsonPretty(doc, Serial);
+  serializeJsonPretty(doc, json);
+
+  client.loop();
+
+  Serial.print("Publish message: ");
+    Serial.println(json);
+    client.publish(topic, json);
+
+}
+if (moisturePercentage > 42) {
+  digitalWrite(motorPin, HIGH);          // turn off mottor
+  W_P_status=false;
+  StaticJsonDocument<200> doc;
+  JsonObject root = doc.to<JsonObject>();
+
+ root["serial_number"] = "ABC1234";
+  root["temp"] = t;
+  root["humid"] = h;
+  root["Soil_mois"] = moisturePercentage;
+root["W_P_status"] = W_P_status;
+
+
+
+  serializeJsonPretty(doc, Serial);
+  serializeJsonPretty(doc, json);
+
+  client.loop();
+
+  Serial.print("Publish message: ");
+    Serial.println(json);
+    client.publish(topic, json);
+
+}
+delay(60000);
+}
